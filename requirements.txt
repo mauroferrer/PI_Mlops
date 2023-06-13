@@ -1,0 +1,9 @@
+pandas 
+uvicorn 
+FastAPI
+locale
+datetime
+numpy
+matplotlib.pyplot
+pandas_profiling
+seaborn
