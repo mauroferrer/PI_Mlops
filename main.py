@@ -1,9 +1,18 @@
-import pandas as pd
-import numpy as np 
-from fastapi import FastAPI
-import uvicorn 
+
+    ####Importamos librerias 
+from fastapi import FastAPI, HTTPException #Para crear la api
+import pandas as pd # Manejo de dataframes 
+from typing import Optional
+import uvicorn  # Para correr nuestra API
+from sklearn.metrics.pairwise import cosine_similarity #Utilizamos para obtener la similitud del coseno 
+from sklearn.utils.extmath import randomized_svd # Utilizamos SVD para desponer nuestra matriz 
+from sklearn.feature_extraction.text import  TfidfVectorizer #Utilizamos para vectorizar datos tipo texto y convertirlos en una representacion numerica
+import numpy as np # Manejo de matrices, array, etc
 import locale
 import datetime
+
+
+
 
 app = FastAPI()
 
@@ -11,7 +20,7 @@ app = FastAPI()
 def presentacion():
     return 'Mauro_Ferrera'
 
-data = pd.read_csv('Csvs\\data_terminada.csv')
+data = pd.read_csv('data_terminada.csv')
 
 ####CONSULTA 1
 # Esta consulta nos retorna el mes indicado con la cantidad de peliculas producidas en el mismo
@@ -67,7 +76,7 @@ def votos_titulo(titulo:str):
 #Esta consulta devuelve el retorno de exito del actor pasado como parametro, ademas de la cantidad de peliculas que ha realizado y el promedio de retorno 
 @app.get('/get_actor/{actor}')
 def get_actor(actor:str):
-    data = pd.read_csv('Csvs\\data_terminada.csv')
+    data = pd.read_csv('data_terminada.csv')
     actor_filter = data[data['name'].apply(lambda x: actor in x if isinstance(x, (list, str)) else False)]
     cantidad = actor_filter.shape[0] 
     retorno = actor_filter['return'].sum()
@@ -80,7 +89,7 @@ def get_actor(actor:str):
 # Se coloca el nombre de un director y retorna el retorno del mismo debera devolver el nombre de cada pelicula con su fecha de lanzamiento
 @app.get('/get_director/{director}')
 def get_director(director:str):
-   data = pd.read_csv('Csvs\\data_terminada.csv')
+   data = pd.read_csv('data_terminada.csv')
    director_data = data[data['name_director'].apply(lambda x: director in x if isinstance(x, (list, str)) else False)].head(5)
    ganancias_totales = director_data['revenue'].sum()
    peliculas = []
@@ -93,4 +102,53 @@ def get_director(director:str):
    return {'nombre del director': director, 'retorno total': ganancias_totales, 'peliculas': peliculas}
    
    
-   
+   #### CREACION DEL MODELO DE RECOMENDACIONES ####
+
+user_item = data[['title','vote_count','name_genres']] #Utilizamos solo estas 4 columnas
+user_item.reset_index(drop=True) #Reseteamos el indice
+user_item = user_item.head(10000) # Cortamos los datos a 10000
+
+#### Creamos la matriz de similitud del coseno ####
+
+# Vectorizador TfidfVectorizer con parámetros de reduccion procesamiento
+vectorizer = TfidfVectorizer(min_df=10, max_df=0.5, ngram_range=(1,2))
+
+# Vectorizar, ajustar y transformar el texto de la columna "title" del DataFrame
+X = vectorizer.fit_transform(user_item['title'])
+
+# Calcular la matriz de similitud de coseno con una matriz reducida de 7000
+similarity_matrix = cosine_similarity(X[:1250,:])
+
+# Obtener la descomposición en valores singulares aleatoria de la matriz de similitud de coseno con 10 componentes
+n_components = 10
+U, Sigma, VT = randomized_svd(similarity_matrix, n_components=n_components)
+
+# Construir la matriz reducida de similitud de coseno
+reduced_similarity_matrix = U.dot(np.diag(Sigma)).dot(VT)
+
+
+
+####Creamo la funcion utilizando la matriz 'reduce_similarity_matrix'
+#Consulta 7 
+@app.get('/get_recomendation/{titulo}')
+def get_recommendation(titulo: str):
+    try:
+        #Ubicamos el indice del titulo pasado como parametro en la columna 'title' del dts user_item
+        indice = np.where(user_item['title'] == titulo)[0][0]
+        #Encontramos los indices de las puntuaciones y caracteristicas similares del titulo 
+        puntuaciones_similitud = reduced_similarity_matrix[indice,:]
+        #Ordenamos los indices de menor a mayor
+        puntuacion_ordenada = np.argsort(puntuaciones_similitud)[::-1]
+        #seleccionamos solo 5 
+        top_indices = puntuacion_ordenada[:5]
+        #retornamos los 5 items con sus titulos como una lista
+        return user_item.loc[top_indices, 'title'].tolist()
+        #Si el titulo dado no se encuentra damos un aviso
+    except IndexError:
+        print(f"El título '{titulo}' no se encuentra en la base de datos. Intente con otro título.")
+ 
+
+
+if __name__ == "_main_":
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
